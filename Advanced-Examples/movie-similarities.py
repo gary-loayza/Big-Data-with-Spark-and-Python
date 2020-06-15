@@ -23,6 +23,17 @@ def makePairs( userRatings ):
     (movie2, rating2) = ratings[1]
     return ((movie1, movie2), (rating1, rating2))
 
+def makeCheckList( relevantMovies ):
+    """
+    Removes the genre list from the RDD, transforming from
+    ((movieID, [genre1, ..., genre15]), (movieID, [genre1, ..., genre15]))
+    to
+    (movieID, movieID)
+    """
+    movie1 = relevantMovies[0][0]
+    movie2 = relevantMovies[1][0]
+    return (movie1, movie2)
+
 def filterDuplicates( userRatings ):
     """
     .filter() Documentation:
@@ -37,6 +48,49 @@ def filterDuplicates( userRatings ):
     (movie1, rating1) = ratings[0]
     (movie2, rating2) = ratings[1]
     return movie1 < movie2
+
+def filterRelevants(genreCombos):
+    """
+    Check each genre and determine if there is a match.
+    Also filter out any combinations of the same movie.
+    """
+    (movie1, genre1) = genreCombos[0]
+    (movie2, genre2) = genreCombos[1]
+
+    if (movie1 == movie2):
+        return False
+    elif genre1[0] and genre2[0]:
+        return True
+    elif genre1[1] and genre2[1]:
+        return True
+    elif genre1[2] and genre2[2]:
+        return True
+    elif genre1[3] and genre2[3]:
+        return True
+    elif genre1[4] and genre2[4]:
+        return True
+    elif genre1[5] and genre2[5]:
+        return True
+    elif genre1[6] and genre2[6]:
+        return True
+    elif genre1[7] and genre2[7]:
+        return True
+    elif genre1[8] and genre2[8]:
+        return True
+    elif genre1[9] and genre2[9]:
+        return True
+    elif genre1[10] and genre2[10]:
+        return True
+    elif genre1[11] and genre2[11]:
+        return True
+    elif genre1[12] and genre2[12]:
+        return True
+    elif genre1[13] and genre2[13]:
+        return True
+    elif genre1[14] and genre2[14]:
+        return True
+    else:
+        return False
 
 def computeCosineSimilarity(ratingPairs):
     numPairs = 0
@@ -64,25 +118,49 @@ print("\nLoading movie names...")
 nameDict = loadMovieNames()
 
 data = sc.textFile("./data/ml-100k/u.data")
+item = sc.textFile("./data/ml-100k/u.item")
 
 # Map ratings to key / value pairs: user ID => movie ID, rating
 ratings = data.map(lambda l: l.split()).map(lambda l: (int(l[0]), (int(l[1]), float(l[2]))))
+# Map genres to key / value pairs: (movieID, [genre1, genre2, ..., genre15])
+genres = item.map(lambda x: x.split("|")).map(
+        lambda x: (int(x[0]), list(map(int, x[5:]))))
 
 # Emit every movie rated together by the same user.
 # Self-join to find every combination.
 joinedRatings = ratings.join(ratings)
 
+# Emit every movie combination with their respective genres attached as a list
+joinedGenres = genres.cartesian(genres)
+
 # At this point our RDD consists of userID => ((movieID, rating), (movieID, rating))
+# The joinedGenres RDD consists of:
+# ((movieID, [genre1, ..., genre15]), (movieID, [genre1, ..., genre15]))
 
 # Filter out duplicate pairs
 uniqueJoinedRatings = joinedRatings.filter(filterDuplicates)
 
+# Filter out duplicate genres and movies with no relevance
+relevantJoinedGenres = joinedGenres.filter(filterRelevants)
+
+# Now, in order to compile the relevants from the resulting filter into an
+# applicable list, we must map() the genres RDD into the movie pair form.
+genreCheckList = relevantJoinedGenres.map(makeCheckList)
+
+checkList = sc.broadcast(genreCheckList.collect())
+
 # Now key by (movie1, movie2) pairs.
 moviePairs = uniqueJoinedRatings.map(makePairs)
 
+# From here, we can use the list as a reference for a filter by performing
+# some check to see if the final results of the moviePairs RDD has some entry
+# in the genreCheckList.
+relevantMoviePairs = moviePairs.filter(lambda e: (e[0][0],e[0][1]) in
+        checkList.value)
+
 # We now have (movie1, movie2) => (rating1, rating2)
 # Now collect all ratings for each movie pair and compute similarity
-moviePairRatings = moviePairs.groupByKey()
+moviePairRatings = relevantMoviePairs.groupByKey()
 
 # We now have (movie1, movie2) = > (rating1, rating2), (rating1, rating2) ...
 # Can now compute similarities.
@@ -94,7 +172,6 @@ moviePairSimilarities = moviePairRatings.mapValues(computeCosineSimilarity).cach
 
 # Extract similarities for the movie we care about that are "good".
 if (len(sys.argv) > 1):
-
     scoreThreshold = 0.97
     coOccurenceThreshold = 50
 
